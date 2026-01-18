@@ -1,346 +1,108 @@
 import os
-import random
+import uuid
 import requests
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    BotCommand,
-)
+import asyncio
+
+from fastapi import FastAPI, Request
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
-    filters,
 )
 
-# ================= НАСТРОЙКИ =================
-
+# ================== ENV ==================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 KIE_API_KEY = os.getenv("KIE_API_KEY")
 
-KIE_URL = "https://api.kie.ai/gemini-3-pro/v1/chat/completions"
+# ================== API ==================
+KIE_GENERATE_URL = "https://api.kie.ai/api/v1/suno/generate"
 
-# ================= СТИКЕРЫ =================
+# ⚠️ ЗАМЕНИ ПОТОМ на реальный домен Koyeb
+CALLBACK_BASE_URL = "https://YOUR_KOYEB_URL"
 
-STICKERS_SHORT = [
-    "CAACAgIAAxkBAAFAkF1pZC5-bjCQGO3vSDBxNs9uw47WkwACrRIAAmM-SEj3kkxB7sI7OjgE",
-    "CAACAgIAAxkBAAFAkGNpZC7dlW9bmugdkDPxkqFI2O2oXgACmw4AAhJp0UjTJWW13JUuJzgE",
-]
+# ================== APP ==================
+app = FastAPI()
+telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-STICKERS_MEDIUM = [
-    "CAACAgIAAxkBAAFAkGVpZC85SqT4hr8HkTkGJ9jyS99kTgAC2wwAArL_AAFKYuoEPmlC2wg4BA",
-    "CAACAgIAAxkBAAFAkGhpZC-nW0PeUnQJxrsiavi6HoT1TwACLwEAAvcCyA8H6pkHXqjshDgE",
-]
+# Храним кто запросил генерацию
+TASKS = {}
 
-STICKERS_LONG = [
-    "CAACAgIAAxkBAAFAjZNpY_STcXRsy6Em-yA2duH9cEmpmAACiQoAAnFuiUvTl1zojCsDsDgE",
-]
-
-def get_thinking_sticker(text: str):
-    l = len(text)
-    if l < 40:
-        return random.choice(STICKERS_SHORT)
-    elif l < 120:
-        return random.choice(STICKERS_MEDIUM)
-    else:
-        return random.choice(STICKERS_LONG)
-
-# ================= КНОПКИ =================
-
-def reasons_menu():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🎂 День рождения", callback_data="reason_birthday"),
-            InlineKeyboardButton("🎄 Новый год", callback_data="reason_newyear"),
-        ],
-        [
-            InlineKeyboardButton("🎉 Праздник", callback_data="reason_holiday"),
-            InlineKeyboardButton("❤️ Признание", callback_data="reason_love"),
-        ],
-        [
-            InlineKeyboardButton("💍 Свадьба", callback_data="reason_wedding"),
-            InlineKeyboardButton("😂 Розыгрыш", callback_data="reason_joke"),
-        ],
-        [
-            InlineKeyboardButton("🤝 Поддержка", callback_data="reason_support"),
-            InlineKeyboardButton("✍️ Свой повод", callback_data="reason_custom"),
-        ],
-    ])
-
-def genres_menu():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🎶 Поп", callback_data="genre_pop"),
-            InlineKeyboardButton("🎤 Рэп / хип-хоп", callback_data="genre_rap"),
-        ],
-        [
-            InlineKeyboardButton("💃 Диско 90-х", callback_data="genre_disco90"),
-            InlineKeyboardButton("🎸 Рок", callback_data="genre_rock"),
-        ],
-        [
-            InlineKeyboardButton("🎷 Шансон", callback_data="genre_chanson"),
-            InlineKeyboardButton("🌌 Транс", callback_data="genre_trance"),
-        ],
-        [
-            InlineKeyboardButton("🎻 Классика", callback_data="genre_classic"),
-            InlineKeyboardButton("🔥 Трэп", callback_data="genre_trap"),
-        ],
-        [InlineKeyboardButton("✍️ Свой стиль", callback_data="genre_custom")],
-    ])
-
-def buy_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🤖 Оплата через CryptoBot", callback_data="buy_crypto")],
-        [InlineKeyboardButton("⭐ Telegram Stars", callback_data="buy_stars")],
-    ])
-
-def crypto_packages():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("499 ₽   →   1 песня", callback_data="pack_1")],
-        [InlineKeyboardButton("899 ₽   →   3 песни", callback_data="pack_3")],
-        [InlineKeyboardButton("1499 ₽ →   10 песен", callback_data="pack_10")],
-    ])
-
-# ================= ИИ =================
-
-def ai_generate_lyrics(prompt):
-    r = requests.post(
-        KIE_URL,
-        headers={
-            "Authorization": f"Bearer {KIE_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "Ты профессиональный автор песен. "
-                        "Пиши живо, эмоционально, как в Bro Hit. "
-                        "Перед текстом всегда добавляй короткий комментарий-реакцию."
-                    )
-                },
-                {"role": "user", "content": prompt}
-            ]
-        },
-        timeout=90
-    )
-    return r.json()["choices"][0]["message"]["content"]
-
-# ================= СТАРТ =================
-
-async def start_base(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    context.user_data["state"] = "reason"
-
-    await update.message.reply_text(
-        "Какую песню ты хотел бы создать? "
-        "Можешь выбрать из списка или написать свой вариант.",
-        reply_markup=reasons_menu()
-    )
-
+# ================== TELEGRAM ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_name = update.effective_user.first_name or "друг"
-
     await update.message.reply_text(
-        f"Привет, {user_name}! 👋"
+        "🎵 Привет!\n\n"
+        "Отправь команду:\n"
+        "/gen текст песни"
     )
 
-    await start_base(update, context)
+async def gen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("❌ Напиши текст после /gen")
+        return
 
-async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await start_base(update, context)
+    prompt = " ".join(context.args)
+    chat_id = update.effective_chat.id
 
-async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Выбери способ оплаты\nдля покупки песен:",
-        reply_markup=buy_menu()
-    )
+    task_id = str(uuid.uuid4())
+    TASKS[task_id] = chat_id
 
-async def ref(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    bot_username = (await context.bot.get_me()).username
+    payload = {
+        "model": "V4_5",
+        "prompt": prompt,
+        "callbackUrl": f"{CALLBACK_BASE_URL}/callback/{task_id}"
+    }
 
-    ref_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+    headers = {
+        "Authorization": f"Bearer {KIE_API_KEY}",
+        "Content-Type": "application/json"
+    }
 
-    await update.message.reply_text(
-        "👥 Реферальная программа\n\n"
-        "Хочешь больше песен — зови друзей 🎶\n\n"
-        "🔹 Ты делишься ссылкой\n"
-        "🔹 Друг создаёт песню\n"
-        "🔹 В будущем вы оба получите бонусы 🎁\n\n"
-        "Твоя персональная ссылка 👇\n"
-        f"{ref_link}\n\n"
-        "Скоро здесь появятся награды 💎"
-    )
+    r = requests.post(KIE_GENERATE_URL, json=payload, headers=headers)
 
+    if r.status_code != 200:
+        await update.message.reply_text("❌ Ошибка запуска генерации")
+        return
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "❓ Помощь\n\n"
-        "1️⃣ Выбери повод\n"
-        "2️⃣ Выбери жанр\n"
-        "3️⃣ Опиши идею\n\n"
-        "🎶 Бот сделает песню\n"
-        "👥 А за приглашённых друзей скоро будут бонусы"
-    )
+    await update.message.reply_text("⏳ Генерирую трек, подожди...")
 
+# ================== CALLBACK ==================
+@app.post("/callback/{task_id}")
+async def callback(task_id: str, request: Request):
+    data = await request.json()
 
-# ================= CALLBACK =================
+    if task_id not in TASKS:
+        return {"status": "unknown task"}
 
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    data = q.data
-    msg = q.message
+    chat_id = TASKS[task_id]
 
-    if data.startswith("reason_"):
-        if data == "reason_custom":
-            context.user_data["state"] = "custom_reason"
-            await msg.reply_text("✍️ Напиши свой повод")
-            return
+    # Ждём финальный callback
+    if data.get("callbackType") != "complete":
+        return {"status": "ok"}
 
-        reason_map = {
-            "birthday": "🎂 День рождения",
-            "newyear": "🎄 Новый год",
-            "holiday": "🎉 Праздник",
-            "love": "❤️ Признание",
-            "wedding": "💍 Свадьба",
-            "joke": "😂 Розыгрыш",
-            "support": "🤝 Поддержка",
-        }
+    audio_url = data["data"]["audioUrl"]
 
-        key = data.replace("reason_", "")
-        context.user_data["reason"] = reason_map[key]
-        context.user_data["state"] = "genre"
-
-        await msg.reply_text(f"Тип песни: {context.user_data['reason']}")
-        await msg.reply_text(
-    "🎵 В каком жанре делаем песню?\n"
-    "Можешь выбрать из списка или написать свой.",
-    reply_markup=genres_menu()
-)
-
-
-    elif data.startswith("genre_"):
-        if data == "genre_custom":
-            context.user_data["state"] = "custom_genre"
-            await msg.reply_text("✍️ Опиши стиль")
-            return
-
-        genre_map = {
-            "pop": "🎶 Поп",
-            "rap": "🎤 Рэп / хип-хоп",
-            "disco90": "💃 Диско 90-х",
-            "rock": "🎸 Рок",
-            "chanson": "🎷 Шансон",
-            "trance": "🌌 Транс",
-            "classic": "🎻 Классика",
-            "trap": "🔥 Трэп",
-        }
-
-        key = data.replace("genre_", "")
-        context.user_data["genre"] = genre_map[key]
-        context.user_data["state"] = "description"
-
-        await msg.reply_text(f"Тип песни: {context.user_data['reason']}")
-        await msg.reply_text(f"Жанр песни: {context.user_data['genre']}")
-        await msg.reply_text(
-            "Ну а теперь самое главное!\n"
-            "Повод и жанр выбраны — давай сделаем песню по-настоящему личной 🎯\n\n"
-            "💬 Напиши всё, что может вдохновить:\n"
-            "— Имя героя\n"
-            "— Фишки, истории, фразы\n"
-            "— Настроение трека\n\n"
-            "Чем больше деталей — тем сильнее трек 🎶"
+    async def send_audio():
+        await telegram_app.bot.send_audio(
+            chat_id=chat_id,
+            audio=audio_url,
+            caption="🎶 Готово!"
         )
 
-    elif data == "buy_crypto":
-        await msg.reply_text(
-            "🎵 Сколько песен хочешь взять?\n"
-            "От 100 рублей за песню в большом пакете!",
-            reply_markup=crypto_packages()
-        )
+    asyncio.create_task(send_audio())
+    return {"status": "sent"}
 
-    elif data == "buy_stars":
-        await msg.reply_text(
-            "⭐ Telegram Stars\n\n"
-            "Оплата через звёзды\n"
-            "в разработке 🚧"
-        )
+# ================== STARTUP ==================
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("gen", gen))
 
-    elif data.startswith("pack_"):
-        await msg.reply_text(
-            "🤖 CryptoBot\n\n"
-            "Оплата скоро будет подключена 💳"
-        )
+@app.on_event("startup")
+async def startup():
+    await telegram_app.initialize()
+    await telegram_app.start()
 
-# ================= ТЕКСТ =================
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    state = context.user_data.get("state")
-
-    if state == "custom_reason":
-        context.user_data["reason"] = f"✍️ {text}"
-        context.user_data["state"] = "genre"
-        await update.message.reply_text(f"Тип песни: {context.user_data['reason']}")
-        await update.message.reply_text("Выбери жанр 👇", reply_markup=genres_menu())
-
-    elif state == "custom_genre":
-        context.user_data["genre"] = f"🎧 {text}"
-        context.user_data["state"] = "description"
-        await update.message.reply_text(f"Тип песни: {context.user_data['reason']}")
-        await update.message.reply_text(f"Жанр песни: {context.user_data['genre']}")
-
-    elif state == "description":
-        thinking = await update.message.reply_sticker(get_thinking_sticker(text))
-
-        prompt = (
-            f"Повод: {context.user_data['reason']}\n"
-            f"Жанр: {context.user_data['genre']}\n\n{text}"
-        )
-
-        lyrics = ai_generate_lyrics(prompt)
-
-        try:
-            await thinking.delete()
-        except:
-            pass
-
-        await update.message.reply_text(lyrics)
-
-# ================= ЗАПУСК =================
-
-async def setup_commands(app):
-    await app.bot.set_my_commands([
-        BotCommand("new_song", "🎵 Новая песня"),
-        BotCommand("buy", "🛒 Купить"),
-        BotCommand("ref", "👥 Реферал"),
-        BotCommand("help", "❓ Помощь"),
-        BotCommand("restart", "🔁 Перезапустить бота"),
-    ])
-
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("new_song", start_base))
-    app.add_handler(CommandHandler("restart", restart))
-    app.add_handler(CommandHandler("buy", buy))
-    app.add_handler(CommandHandler("ref", ref))
-    app.add_handler(CommandHandler("help", help_cmd))
-
-    app.add_handler(CallbackQueryHandler(buttons))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    app.post_init = setup_commands
-    app.run_polling(stop_signals=None)
-
-if __name__ == "__main__":
-    main()
-
-
+@app.on_event("shutdown")
+async def shutdown():
+    await telegram_app.stop()
+    await telegram_app.shutdown()
+    
