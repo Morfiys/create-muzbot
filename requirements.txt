@@ -1,0 +1,14 @@
+# Telegram bot
+python-telegram-bot==20.4
+
+# ASGI server
+uvicorn==0.23.1
+
+# HTTP client for async requests (Suno, Kie, etc.)
+aiohttp==3.9.4
+
+# Optional: dotenv support for environment variables
+python-dotenv==1.0.0
+
+# If you use requests somewhere in your bot
+requests==2.31.0
