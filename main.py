@@ -106,3 +106,20 @@ async def shutdown():
     await telegram_app.stop()
     await telegram_app.shutdown()
     
+import threading
+import uvicorn
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+def run_bot():
+    application.run_polling()
+
+if __name__ == "__main__":
+    threading.Thread(target=run_bot).start()
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+        
